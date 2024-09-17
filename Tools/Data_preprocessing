@@ -1,0 +1,85 @@
+import numpy as np
+
+import torch
+import json
+import matplotlib.pyplot as plt
+import os
+import cv2
+DATA_DIR = r"C:\Users\BB\Desktop\training_data\ME_dataset"  # Replace with your data directory path
+SAVE_DIR = r"C:\Users\BB\Desktop\training_data\ME_dataset"  # Replace with your save directory path
+CLIP_RANGE = (-1200, 600)  # Min and max clip values
+
+
+def main():
+    """Loads HU dicom image and save as RGB"""
+    try:
+        filenames = os.listdir(DATA_DIR)
+    except FileNotFoundError:
+        print(f"Error: Data directory '{DATA_DIR}' not found.")
+        return
+
+    for filename in filenames:
+        img_path = os.path.join(DATA_DIR, '%s\\npy\\%s.npy' % (filename,filename))
+
+        # Load image processing function (assuming load_img is defined elsewhere)
+        img = load_img(img_path)
+        img = HU_to_RGB(img)
+        # Create folder for patient
+        save_dir_filename = os.path.join(SAVE_DIR, filename)
+        os.makedirs(save_dir_filename, exist_ok=True)  # Avoids OSError if dir exists
+        # Create folder for npy files
+        save_dir_filename = os.path.join(save_dir_filename, "npy")
+        os.makedirs(save_dir_filename, exist_ok=True)
+        save_path = os.path.join(save_dir_filename, f"{filename}.npy")
+        np.save(save_path, img)
+
+    
+
+def load_img(img_path):
+    """Loads HU dicom image, clips and convert to RGB
+
+    Args:
+        img_path: HU image path
+
+    Returns:
+        RGB image
+    """
+
+    try:
+        img = np.load(img_path)
+        return img
+    except FileNotFoundError:
+        print(f"Error: File '{img_path}' not found.")
+        return None
+
+def HU_to_RGB(img):
+    # Clip image values
+    img = np.clip(img, CLIP_RANGE[0], CLIP_RANGE[1])
+
+    # Convert to float32 for calculations
+    img = img.astype(np.float32)
+    # Transpose image dimensions，# [0, y, x, z] -> [0, z, y, x]
+    img = img.transpose(2, 0, 1) 
+    # Normalize image 
+    normalized_img = (img - CLIP_RANGE[0]) / (CLIP_RANGE[1] - CLIP_RANGE[0])
+
+    # convert to uint8
+    processed_img = (normalized_img * 255).astype('uint8')
+    return processed_img
+
+def draw_image(image):
+    plt.imshow(image[100,:,:], cmap='gray')
+    plt.axis('off')
+    plt.show()
+def cv2_draw_image(image):
+    cv2.imshow('image', image[100,:,:])
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+    
