@@ -60,7 +60,6 @@ class BboxReader(Dataset):
                 else:
                     print("No bboxes for %s" % fn)
                 l = np.array(l)
-                #l = fillter_box(l, [512, 512, 512])
                 labels.append(l)        
 
         self.sample_bboxes = labels
@@ -76,52 +75,45 @@ class BboxReader(Dataset):
         self.crop = Crop(cfg)
 
     def __getitem__(self, idx):
+        """
+        idx: gt box base
+        
+        bboxes: all gt box
+
+        bbox: idxth box = [filename index, z,y,x,d,h,w]
+        """
         t = time.time()
         np.random.seed(int(str(t % 1)[2:7]))  # seed according to time
-        is_random_img = False
-        if self.mode in ['train', 'val']:
-            if idx >= len(self.bboxes):
-                is_random_crop = True
-                idx = idx % len(self.bboxes)
-                is_random_img = np.random.randint(2)
-            else:
-                is_random_crop = False
-        else:
-            is_random_crop = False
 
         if self.mode in ['train', 'val']:
-            if not is_random_img:
-                bbox = self.bboxes[idx]
-                filename = self.filenames[int(bbox[0])]
-                imgs = self.load_img(filename)
-                bboxes = self.sample_bboxes[int(bbox[0])]
-                # bboxes = fillter_box(bboxes, imgs.shape[1:])
-                isScale = self.augtype['scale'] and (self.mode=='train')
-                sample, target, bboxes, coord = self.crop(imgs, bbox[1:], bboxes, isScale, is_random_crop)
-                draw_all_bbox(sample,target,filename)
-                if self.mode == 'train' and not is_random_crop:                   
-                    sample, target, bboxes = augment(sample, target, bboxes, do_flip=self.augtype['flip'],
-                                                     do_rotate=self.augtype['rotate'], do_swap=self.augtype['swap'])
-                    draw_all_bbox(sample,target,filename)
-            else:
-                randimid = np.random.randint(len(self.filenames))
-                filename = self.filenames[randimid]
-                imgs = self.load_img(filename)
-                bboxes = self.sample_bboxes[randimid]
-                bboxes = fillter_box(bboxes, imgs.shape[1:])
-                isScale = self.augtype['scale'] and (self.mode=='train')
-                sample, target, bboxes, coord = self.crop(imgs, [], bboxes, isScale=False, isRand=True)
-
-            if sample.shape[1] != self.cfg['crop_size'][0] or sample.shape[2] != \
-                self.cfg['crop_size'][1] or sample.shape[3] != self.cfg['crop_size'][2]:
-                print(filename, sample.shape)
-
+            #-----------------
+            # select sample
+            #-----------------
+            bbox = self.bboxes[idx]
+            filename = self.filenames[int(bbox[0])]
+            imgs = self.load_img(filename)
+            bboxes = self.sample_bboxes[int(bbox[0])]
+            isScale = self.augtype['scale'] and (self.mode=='train')
+            #---------------------
+            # random crop
+            #---------------------
+            
+            #draw_image_bbox(imgs,bboxes)
+            sample, target, bboxes = self.crop(imgs, bbox[1:], bboxes, isScale)
+            draw_image_bbox(sample,[target])
+            #-----------------
+            # augmentation
+            #-----------------
+            if self.mode == 'train':                   
+                sample, target, bboxes = augment(sample, target, bboxes, do_flip=self.augtype['flip'],
+                                                    do_rotate=self.augtype['rotate'], do_swap=self.augtype['swap'])         
+            check_sample_shape(sample, filename, self.cfg)
+            # ------------
             # Normalize
+            #-------------
             sample = self.hu_normalize(sample)
-            #draw_all_bbox(sample,target,filename)
             bboxes = fillter_box(bboxes, self.cfg['crop_size'])
             label = np.ones(len(bboxes), dtype=np.int32)
-            # print(bboxes.shape)
             if len(bboxes.shape) != 1:
                 for i in range(3):
                     bboxes[:, i+3] = bboxes[:, i+3] + self.cfg['bbox_border']
@@ -141,34 +133,17 @@ class BboxReader(Dataset):
             bboxes = np.array(bboxes)
             label = np.ones(len(bboxes), dtype=np.int32)
 
-            input = self.hu_normalize(image)
-#             input = (image.astype(np.float32) - 128.) / 128.
-                
+            input = self.hu_normalize(image)          
             return [torch.from_numpy(input).float(), bboxes, label]
-            # imgs = self.load_img(self.filenames[idx])
-            # bboxes = self.sample_bboxes[idx]
-            # nz, nh, nw = imgs.shape[1:]
-            # pz = int(np.ceil(float(nz) / self.stride)) * self.stride
-            # ph = int(np.ceil(float(nh) / self.stride)) * self.stride
-            # pw = int(np.ceil(float(nw) / self.stride)) * self.stride
-            # imgs = np.pad(imgs, [[0,0],[0, pz - nz], [0, ph - nh], [0, pw - nw]], 'constant',constant_values = self.pad_value)
-            
-            # xx,yy,zz = np.meshgrid(np.linspace(-0.5,0.5,imgs.shape[1]/self.stride),
-            #                        np.linspace(-0.5,0.5,imgs.shape[2]/self.stride),
-            #                        np.linspace(-0.5,0.5,imgs.shape[3]/self.stride),indexing ='ij')
-            # coord = np.concatenate([xx[np.newaxis,...], yy[np.newaxis,...],zz[np.newaxis,:]],0).astype('float32')
-            # imgs, nzhw = self.split_comber.split(imgs)
-            # coord2, nzhw2 = self.split_comber.split(coord,
-            #                                        side_len = self.split_comber.side_len/self.stride,
-            #                                        max_stride = self.split_comber.max_stride/self.stride,
-            #                                        margin = self.split_comber.margin/self.stride)
-            # assert np.all(nzhw==nzhw2)
-            # imgs = (imgs.astype(np.float32)-128)/128
-            # return torch.from_numpy(imgs), bboxes, torch.from_numpy(coord2), np.array(nzhw)
 
 
 
     def __len__(self):
+        """
+        return:
+            train,valid: bbox number
+            eval: filename
+        """
         if self.mode == 'train':
             print(int(len(self.bboxes) / (1-self.r_rand)))
             return int(len(self.bboxes) / (1-self.r_rand))
@@ -266,8 +241,16 @@ class Crop(object):
         self.stride = config['stride']
         self.pad_value = config['pad_value']
 
-    def __call__(self, imgs, target, bboxes, isScale=False, isRand=False):
+    def __call__(self, imgs, target, bboxes, isScale=False):
+        """
+        imgs: the CT imgae
+
+        target: the select bbox for center crop
+
+        bboxes: all bboxes of imgs
+        """
         if isScale:
+            # if scale,calculate the crop size and scale range
             radiusLim = [7.,15.]
             scaleLim = [0.85,1.15]
             min_r = np.min(target[3:6])
@@ -281,50 +264,44 @@ class Crop(object):
                 crop_size = self.crop_size
         else:
             crop_size = self.crop_size
+
         bound_size = self.bound_size
         target = np.copy(target)
         bboxes = np.copy(bboxes)
-
+        
+        # get start and end point
         start = []
         for i in range(3):
-            # start.append(int(target[i] - crop_size[i] / 2))
-            if not isRand:
-                r = target[i+3]/2
-                s = np.floor(target[i] - r) + 1 - bound_size
-                e = np.ceil(target[i] + r) + 1 + bound_size - crop_size[i]
-                e = max(e,0)
-                s = min(s,imgs.shape[i+1]-crop_size[i])
-            else:
-                s = np.max([imgs.shape[i+1]-crop_size[i]/2, imgs.shape[i+1]/2+bound_size])
-                e = np.min([crop_size[i]/2, imgs.shape[i+1]/2-bound_size])
-                target = np.array([np.nan, np.nan, np.nan, np.nan])
+            r = target[i+3]/2
+            s = np.floor(target[i] - r) + 1 - bound_size
+            e = np.ceil(target[i] + r) + 1 + bound_size - crop_size[i]
+            e = max(e,0)
+            s = min(s,imgs.shape[i+1]-crop_size[i])
             if s > e:                 
                 start.append(np.random.randint(e,s))
             else:
                 start.append(int(e)+np.random.randint(0,bound_size/2))
-            # if s > e:
-            #     start.append(np.random.randint(e, s))#!
-            # else:
-            #     start.append(int(target[i])-crop_size[i]/2+np.random.randint(-bound_size/2,bound_size/2))
-        coord=[]
 
+        # padding 
         pad = []
         pad.append([0,0])
         for i in range(3):
             leftpad = max(0,-start[i])
             rightpad = max(0,start[i]+crop_size[i]-imgs.shape[i+1])
             pad.append([leftpad,rightpad])
+        # get cube by cropping from imgs
         crop = imgs[:,
             int(max(start[0],0)):int(min(start[0] + int(crop_size[0]),imgs.shape[1])),
             int(max(start[1],0)):int(min(start[1] + int(crop_size[1]),imgs.shape[2])),
             int(max(start[2],0)):int(min(start[2] + int(crop_size[2]),imgs.shape[3]))]
         crop = np.pad(crop, pad, 'constant', constant_values=self.pad_value)
+        # adjust target and bboxes coordinate of new cube 
         for i in range(3):
             target[i] = target[i] - start[i]
         for i in range(len(bboxes)):
             for j in range(3):
                 bboxes[i][j] = bboxes[i][j] - start[j]
-
+        # if scale, interpolate the cropped cube
         if isScale:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -340,48 +317,37 @@ class Crop(object):
             for i in range(len(bboxes)):
                 for j in range(6):
                     bboxes[i][j] = bboxes[i][j] * scale
+        return crop, target, bboxes
 
-        return crop, target, bboxes, coord
+def check_sample_shape(sample, filename, cfg):
+    if (sample.shape[1] != cfg['crop_size'][0] or 
+        sample.shape[2] != cfg['crop_size'][1] or 
+        sample.shape[3] != cfg['crop_size'][2]):
+        
+        warning_message = f"File '{filename}' has shape {sample.shape}, " \
+                          f"which does not match expected crop size {cfg['crop_size']}."
+        warnings.warn(warning_message, UserWarning)
 
+def draw_image_bbox(image, bboxes):
+    """
+    draw center image of CT with box
+    
+    image: the ct scan
 
-import cv2
-def draw_image(image):
-    plt.imshow(image, cmap='gray')
-    plt.axis('off')
-    plt.show()
-
-
-def draw_bbox(image, bbox,filename):
-    return
-    plt.clf()
-    plt.title(filename)
-    plt.figure(figsize=(5,5))
-    plt.imshow(image, cmap='gray')
-    plt.axis('off')  # 不顯示座標軸
-    # 解析 bounding box 的坐標
-    z,y,x,d ,h,w = bbox 
-    x = x - w / 2
-    y = y - h / 2
-    # 繪製 bounding box
-    plt.gca().add_patch(plt.Rectangle((x, y), w, h, linewidth=2, edgecolor='g', facecolor='none'))  # 綠色邊框
-    plt.show()
-
-def draw_all_bbox(image, bbox,filename):
-    return
+    bbox : a single bbox
+    """
     import matplotlib
     matplotlib.use('TkAgg') 
-    plt.clf()
+    for bbox in bboxes : 
+        z,y,x,d,h,w = bbox 
 
-    z,y,x,d,h,w = bbox 
-    z = int(z - d / 2)
-    x = x - w / 2   
-    y = y - h / 2
-    for i in range(1):
-        img = image[0][z+i,:,:]
+        x = x - w / 2   
+        y = y - h / 2
+
+        img = image[0][int(z),:,:]
         plt.figure(figsize=(5,5))
-        plt.imshow(img, cmap='gray')
+        plt.imshow(img, cmap='gray', interpolation='nearest')  
         plt.axis('off')  # 不顯示座標軸
-        
         # 繪製 bounding box
         plt.gca().add_patch(plt.Rectangle((x, y), w, h, linewidth=2, edgecolor='g', facecolor='none'))  # 綠色邊框
         plt.show() 
