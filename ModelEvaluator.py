@@ -189,10 +189,10 @@ class ModelEvaluator:
         # Log the sensitivity at each FPR threshold to TensorBoard
         fpr_thresholds = [0.125, 0.25, 0.5, 1, 2, 4, 8]
         for i, fpr in enumerate(fpr_thresholds):
-            writer.add_scalar(f'sens_{fpr}', recalls[i], epoch)
+            writer.add_scalar(save_filename+f' sens_{fpr}', recalls[i], epoch)
 
         # Log the mean recall (average sensitivity) to TensorBoard
-        writer.add_scalar('sens_mean', mean_recall, epoch)
+        writer.add_scalar(save_filename+' sens_mean', mean_recall, epoch)
 
         # Clear CUDA memory to avoid memor  y leaks
         torch.cuda.empty_cache()
