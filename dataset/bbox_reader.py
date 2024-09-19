@@ -13,6 +13,7 @@ import warnings
 import json
 import matplotlib.pyplot as plt
 from dataset.split_combine import SplitComb
+import torch.nn.functional as F
 class BboxReader(Dataset):
     def __init__(self, data_dir, set_name, augtype, cfg, mode='train'):
         self.mode = mode
@@ -100,7 +101,7 @@ class BboxReader(Dataset):
             
             #draw_image_bbox(imgs,bboxes)
             sample, target, bboxes = self.crop(imgs, bbox[1:], bboxes, isScale)
-            draw_image_bbox(sample,[target])
+            #draw_image_bbox(sample,[target])
             #-----------------
             # augmentation
             #-----------------
@@ -252,7 +253,7 @@ class Crop(object):
         if isScale:
             # if scale,calculate the crop size and scale range
             radiusLim = [7.,15.]
-            scaleLim = [0.85,1.15]
+            scaleLim = [1,2]
             min_r = np.min(target[3:6])
             max_r = np.max(target[3:6])
             scaleRange = [np.min([np.max([(radiusLim[0]/min_r),scaleLim[0]]),1])
@@ -302,10 +303,14 @@ class Crop(object):
             for j in range(3):
                 bboxes[i][j] = bboxes[i][j] - start[j]
         # if scale, interpolate the cropped cube
+
         if isScale:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                crop = zoom(crop, [1, scale, scale, scale], order=1)
+            # 使用 torch.nn.functional.interpolate 取代room操作，加速至少10倍 
+            crop_tensor = torch.from_numpy(crop).float().unsqueeze(0)
+            new_size = [int(scale * s) for s in crop_tensor.shape[2:]]
+            crop_tensor = F.interpolate(crop_tensor, size=new_size, mode='trilinear', align_corners=False)
+            crop = crop_tensor.squeeze(0).numpy()
+
             newpad = self.crop_size[0] - crop.shape[1:][0]
             if newpad < 0:
                 crop = crop[:, :-newpad, :-newpad, :-newpad]
@@ -314,6 +319,7 @@ class Crop(object):
                 crop = np.pad(crop, pad2, 'constant', constant_values=self.pad_value)
             for i in range(6):
                 target[i] = target[i] * scale
+
             for i in range(len(bboxes)):
                 for j in range(6):
                     bboxes[i][j] = bboxes[i][j] * scale
