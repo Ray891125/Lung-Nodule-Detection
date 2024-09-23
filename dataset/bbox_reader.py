@@ -155,10 +155,10 @@ class BboxReader(Dataset):
             train,valid: bbox number
             eval: filename
         """
-        if self.mode == 'train1':
+        if self.mode == 'train':
             print(int(len(self.bboxes) / (1-self.r_rand)))
             return int(len(self.bboxes) / (1-self.r_rand))
-        elif self.mode =='val1':
+        elif self.mode =='val':
             return len(self.bboxes)
         else:
             return len(self.filenames)
