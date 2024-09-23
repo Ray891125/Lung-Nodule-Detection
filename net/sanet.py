@@ -48,7 +48,7 @@ class SANet(nn.Module):
         self.use_rcnn = False
         
 
-    def forward(self, inputs, truth_boxes, truth_labels, split_combiner=None, nzhw=None):
+    def forward(self, inputs, truth_boxes = None, truth_labels = None):
         #-------------------------------------
         # 1. get features 
         #-------------------------------------
@@ -81,7 +81,7 @@ class SANet(nn.Module):
         #-------------------------------------
         self.rpn_proposals = []
         if self.use_rcnn or self.mode in ['eval', 'test']:
-            self.rpn_proposals = rpn_nms(self.cfg, self.mode, inputs, self.rpn_window,
+            self.rpn_proposals = rpn_nms_split_eval(self.cfg, self.mode, inputs, self.rpn_window,
                   self.rpn_logits_flat, self.rpn_deltas_flat)
 
 
