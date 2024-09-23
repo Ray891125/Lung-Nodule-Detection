@@ -7,8 +7,9 @@ from tqdm import tqdm
 from torch.autograd import Variable
 from evaluationScript.eval import nodule_evaluation
 from evaluationScript.logs import setup_logging
-
-
+from dataset.split_combine import SplitComb
+from utils.pybox import *
+from single_config import config
 class ModelEvaluator:
     def __init__(self,rcnn = False):
         """
@@ -21,7 +22,80 @@ class ModelEvaluator:
         """
         self._rpn_submission_path = None  # Private attribute
         self._eval_dir = None  # Private attribute
+    def split_eval(self, net, eval_loader, save_dir,epoch):
+        """
+        Evaluates the network on the evaluation dataset and generates a CSV file
+        with the region proposal network (RPN) predictions.
 
+        Parameters:
+        - epoch: Current epoch number (for logging).
+
+        Returns:
+        - Path to the evaluation directory.
+        """
+        # Set model to evaluation mode
+        net.set_mode('eval')
+
+        # To store RPN results
+        rpn_res = []
+        split_comber = SplitComb(crop_size=config['crop_size'], overlap_size=[32,32,32], pad_value=config['pad_value'], do_padding=True)
+        # Iterate over the evaluation dataset
+        for j, inputs in tqdm(enumerate(eval_loader), total=len(eval_loader), desc='Eval %d' % epoch):
+            rpns = []
+            rpn_outputs_list = []
+            pid = eval_loader.dataset.filenames[j]
+            inputs = inputs[0]
+
+            datas, bboxes, nzhw, dwh = inputs
+            print('[%d] Predicting %s' % (j, pid))
+
+            for data_batch in torch.split(datas,8):
+                 
+                with torch.no_grad():  # Disable gradient computation for evaluation
+                    # Move input to GPU
+                    data_batch = Variable(data_batch).cuda()
+
+                    # Use mixed precision for inference
+                    with torch.cuda.amp.autocast():
+                        net.forward(data_batch)
+
+                # Extract RPN proposals and process the coordinates
+                rpn_output = net.rpn_proposals  
+                for out in rpn_output :
+                    rpn_outputs_list.append(out)
+            rpns = split_comber.combine(rpn_outputs_list, nzhw, dwh)
+            rpns = np.concatenate(rpns, 0)
+            rpns,_ = torch_nms(rpns, 0.5)
+            rpns = rpns[:, [3, 2, 1, 6, 5, 4, 0]]  # Rearrange the columns as needed
+
+            # Get the filename for the current input          
+            names = np.array([[pid]] * len(rpns))  # Create a column with the patient ID
+
+            # Debugging shape info
+            print("Shape of names:", names.shape)
+            print("Shape of rpns after processing:", rpns.shape)
+
+            # Concatenate the names and RPN results
+            rpn_res.append(np.concatenate([names, rpns], axis=1))
+
+        # Concatenate all RPN results into a single array
+        rpn_res = np.concatenate(rpn_res, axis=0)
+
+        # Define column names for the CSV file
+        col_names = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd', 'probability']
+
+        # Create directory to save the evaluation results
+        self._eval_dir = os.path.join(save_dir, 'FROC')
+        if not os.path.exists(self._eval_dir):
+            os.makedirs(self._eval_dir)
+
+        # Define the path for the RPN submission CSV file
+        self._rpn_submission_path = os.path.join(self._eval_dir, 'submission_rpn.csv')
+
+        # Save the RPN results as a CSV file
+        df = pd.DataFrame(rpn_res, columns=col_names)
+        df.to_csv(self._rpn_submission_path, index=False)
+        torch.cuda.empty_cache()
     def eval(self, net, eval_loader, save_dir,epoch):
         """
         Evaluates the network on the evaluation dataset and generates a CSV file

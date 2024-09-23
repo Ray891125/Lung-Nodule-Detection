@@ -4,7 +4,7 @@ from net.TransUnet import TransUnet
 from net.BiFPN import TransBiFPN
 from net.TicNet import TicNet
 import time
-from dataset.collate import train_collate, test_collate, eval_collate
+from dataset.collate import train_collate,split_eval_collate
 from dataset.bbox_reader import BboxReader
 from utils.util import Logger
 from single_config import train_config, datasets_info, net_config, config, test_config
@@ -140,7 +140,7 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
                             num_workers=args.num_workers, pin_memory=True, collate_fn=train_collate,drop_last=True,persistent_workers=True)
     eval_loader = DataLoader(eval_dataset, batch_size=1, shuffle=False,
-                              num_workers=args.num_workers, pin_memory=False, collate_fn=train_collate)
+                              num_workers=args.num_workers, pin_memory=False, collate_fn=split_eval_collate)
     # ----------------------
     # 3. Initilize network
     # ----------------------
@@ -163,7 +163,7 @@ def main():
     warmup_epochs = 20  # Number of warm-up epochs
     start_lr = 0.00001  # Initial learning rate for warm-up
     base_lr = init_lr  # Base learning rate after warm-up
-    step_size = 50  # Number of epochs to wait before decreasing the learning rate
+    step_size = 80  # Number of epochs to wait before decreasing the learning rate
     gamma = 0.1  # Multiplicative factor of learning rate decay
     # Create the warm-up scheduler
     warmup_scheduler = WarmupScheduler(optimizer, warmup_epochs, start_lr, base_lr)
@@ -240,17 +240,17 @@ def main():
         for key in state_dict.keys():
             state_dict[key] = state_dict[key].cpu()
         evaluator = ModelEvaluator()
-        if i % epoch_save == 0 and i >= 0:
+        if i % epoch_save == 0 and i >= 60:
             torch.save({
                 'epoch': i,
                 'out_dir': out_dir, 
                 'state_dict': state_dict,
                 'optimizer' : optimizer.state_dict()},
                 os.path.join(model_out_dir, 'epoch_%03d_loss_%.6f.ckpt' % (i, val_loss)))
-            evaluator.eval(net,eval_loader,out_dir,i)
+            evaluator.split_eval(net,eval_loader,out_dir,i)
             evaluator.froc(i,val_writer,args.test_annotation_dir,args.test_series_uids_path,"combine_27mm")
             evaluator.froc(i,val_writer,"E:\\desktop\\training_data\\My_SAnet\\Data\\crop_test_27.csv",args.test_series_uids_path,"27mm")
-        
+            
             
         elif val_loss < best_loss and i >= 130:
             best_loss = val_loss
