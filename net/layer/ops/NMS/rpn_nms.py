@@ -36,38 +36,6 @@ def make_rpn_windows(f, cfg):
     windows = np.array(windows,dtype=np.float16)
 
     return windows
-# def make_rpn_windows(f, cfg):
-#     import time
-#     """
-#     Generating anchor boxes at each voxel on the feature map,
-#     the center of the anchor box on each voxel corresponds to center
-#     on the original input image.
-
-#     return
-#     windows: list of anchor boxes, [z, y, x, d, h, w]
-#     """
-#     start_time = time.time()  # 開始計時
-
-#     for _ in range(5):  # 重複執行10000次
-#         stride = cfg['stride']
-#         anchors = np.asarray(cfg['anchors'])
-#         offset = (float(stride) - 1) / 2
-#         _, _, D, H, W = f.shape
-#         oz = np.arange(offset, offset + stride * (D - 1) + 1, stride, dtype=np.float16)
-#         oh = np.arange(offset, offset + stride * (H - 1) + 1, stride, dtype=np.float16)
-#         ow = np.arange(offset, offset + stride * (W - 1) + 1, stride, dtype=np.float16)
-
-#         windows = []
-#         for z, y, x, a in itertools.product(oz, oh, ow, anchors):
-#             windows.append([z, y, x, a[0], a[1], a[2]])
-#         windows = np.array(windows, dtype=np.float16)
-
-#     end_time = time.time()  # 結束計時
-#     execution_time = end_time - start_time  # 計算執行時間
-
-#     print("Execution time for 10000 iterations:", execution_time, "seconds")
-
-#     return windows
 
 def rpn_nms(cfg, mode, inputs, window, logits_flat, deltas_flat):
     if mode in ['train',]:
@@ -125,7 +93,98 @@ def rpn_nms(cfg, mode, inputs, window, logits_flat, deltas_flat):
         return proposals
     else:
         return Variable(torch.rand([0, 8])).cuda()
+def rpn_nms_split_eval(cfg, mode, inputs, window, logits_flat, deltas_flat):
+    if mode in ['train',]:
+        nms_pre_score_threshold = cfg['rpn_train_nms_pre_score_threshold']
+        nms_overlap_threshold   = cfg['rpn_train_nms_overlap_threshold']
 
+    elif mode in ['eval', 'valid', 'test',]:
+        nms_pre_score_threshold = cfg['rpn_test_nms_pre_score_threshold']
+        nms_overlap_threshold   = cfg['rpn_test_nms_overlap_threshold']
+
+    else:
+        raise ValueError('rpn_nms(): invalid mode = %s?'%mode)
+
+
+    logits = torch.sigmoid(logits_flat).data.cpu().numpy()
+    deltas = deltas_flat.data.cpu().numpy()
+    batch_size, _, depth, height, width = inputs.size()
+
+    proposals = []
+    for b in range(batch_size):
+        proposal = [np.empty((0, 7),np.float32),]
+
+        ps = logits[b, : , 0].reshape(-1, 1)
+        ds = deltas[b, :, :]
+
+        # Only those anchor boxes larger than a pre-defined threshold
+        # will be chosen for nms computation
+        index = np.where(ps[:, 0] > nms_pre_score_threshold)[0]
+        if len(index) > 0:
+            p = ps[index]
+            d = ds[index]
+            w = window[index]
+            box = rpn_decode(w, d, cfg['box_reg_weight'])
+            box = clip_boxes(box, inputs.shape[2:])
+            p,box = remove_small_boxes(p, box)
+            output = np.concatenate((p, box),1)
+            output = torch.from_numpy(output)
+            output, keep = torch_nms(output, nms_overlap_threshold)
+
+            # prop = np.zeros((len(output), 8),np.float32)
+            # prop[:, 0] = b
+            # prop[:, 1:8] = output
+            
+            proposal.append(output)
+
+        proposal = np.vstack(proposal)
+        proposals.append(proposal)
+
+    return proposals
+def proposal_rpn(cfg, mode, inputs, window, logits_flat, deltas_flat):
+    if mode in ['eval', 'test',]:
+        nms_pre_score_threshold = cfg['rpn_test_nms_pre_score_threshold']
+        nms_overlap_threshold   = cfg['rpn_test_nms_overlap_threshold']
+
+    else:
+        raise ValueError('rpn_nms(): invalid mode = %s?'%mode)
+
+
+    logits = torch.sigmoid(logits_flat).data.cpu().numpy()
+    deltas = deltas_flat.data.cpu().numpy()
+    batch_size, _, depth, height, width = inputs.size()
+
+    proposals = []
+    for b in range(batch_size):
+        proposal = [np.empty((0, 8),np.float32),]
+
+        ps = logits[b, : , 0].reshape(-1, 1)
+        ds = deltas[b, :, :]
+
+        # Only those anchor boxes larger than a pre-defined threshold
+        # will be chosen for nms computation
+        index = np.where(ps[:, 0] > nms_pre_score_threshold)[0]
+        if len(index) > 0:
+            p = ps[index]
+            d = ds[index]
+            w = window[index]
+            box = rpn_decode(w, d, cfg['box_reg_weight'])
+            box = clip_boxes(box, inputs.shape[2:])
+            p,box = remove_small_boxes(p, box)
+            output = np.concatenate((p, box),1)
+            output = torch.from_numpy(output)
+            output, keep = torch_nms(output, nms_overlap_threshold)
+
+            prop = np.zeros((len(output), 8),np.float32)
+            prop[:, 0] = b
+            prop[:, 1:8] = output
+            
+            proposal.append(prop)
+
+        proposal = np.vstack(proposal)
+        proposals.append(proposal)
+
+    return proposals
 def remove_small_boxes(score, boxes):
     """
     Remove boxes smaller than min_size
