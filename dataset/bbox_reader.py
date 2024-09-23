@@ -12,10 +12,13 @@ import nrrd
 import warnings
 import json
 import matplotlib.pyplot as plt
-from dataset.split_combine import SplitComb
+#from dataset.split_combine import SplitComb
 import torch.nn.functional as F
+from dataset.split_combine import SplitComb
 class BboxReader(Dataset):
     def __init__(self, data_dir, set_name, augtype, cfg, mode='train'):
+        #self.split_com ber = SplitComb(64,cfg['max_stride'],cfg['stride'],32,cfg['pad_value'])
+        self.split_comber = SplitComb(crop_size=cfg['crop_size'], overlap_size=[32,32,32], pad_value=cfg['pad_value'], do_padding=True)
         self.mode = mode
         self.cfg = cfg
         self.r_rand = cfg['r_rand_crop']
@@ -96,7 +99,7 @@ class BboxReader(Dataset):
             bboxes = self.sample_bboxes[int(bbox[0])]
             isScale = self.augtype['scale'] and (self.mode=='train')
             #---------------------
-            # random crop
+            # random crop, scale(ok)
             #---------------------
             
             #draw_image_bbox(imgs,bboxes)
@@ -107,7 +110,8 @@ class BboxReader(Dataset):
             #-----------------
             if self.mode == 'train':                   
                 sample, target, bboxes = augment(sample, target, bboxes, do_flip=self.augtype['flip'],
-                                                    do_rotate=self.augtype['rotate'], do_swap=self.augtype['swap'])         
+                                                    do_rotate=self.augtype['rotate'], do_swap=self.augtype['swap'])      
+            #draw_image_bbox(sample,[target])
             check_sample_shape(sample, filename, self.cfg)
             # ------------
             # Normalize
@@ -118,25 +122,31 @@ class BboxReader(Dataset):
             if len(bboxes.shape) != 1:
                 for i in range(3):
                     bboxes[:, i+3] = bboxes[:, i+3] + self.cfg['bbox_border']
-
             return [torch.from_numpy(sample), bboxes, label]
 
         if self.mode in ['eval']:
+
+        # 取得當前索引處的檔名
             filename = self.filenames[idx]
+            
+            # 加載圖像 (通常是 3D CT Scan 圖像)
             imgs = self.load_img(filename)
-            image = pad2factor(imgs[0])
-            image = np.expand_dims(image, 0)
-
+            # draw_image(imgs)
+            # 從 sample_bboxes 取得對應的 bounding boxes
             bboxes = self.sample_bboxes[idx]
-            bboxes = fillter_box(bboxes, imgs.shape[1:])
-            for i in range(3):
-                bboxes[:, i + 3] = bboxes[:, i + 3] + self.cfg['bbox_border']
-            bboxes = np.array(bboxes)
-            label = np.ones(len(bboxes), dtype=np.int32)
+            
+            
 
-            input = self.hu_normalize(image)          
-            return [torch.from_numpy(input).float(), bboxes, label]
-
+            # 使用 split_comber 分割圖像，這個步驟會將圖像分成多個小塊
+            imgs, nzhw, dwh = self.split_comber.split(imgs)
+        
+            
+            # 對圖像進行 HU 值的標準化處理，這是對 CT 圖像的特定處理方法
+            imgs = self.hu_normalize(imgs)
+            # for img in imgs :
+            #     draw_image(img)
+            # 最後將圖像和座標轉換為 PyTorch 張量並返回，同時返回 bounding boxes 和分割資訊 nzhw
+            return [torch.from_numpy(imgs), bboxes, np.array(nzhw),np.array(dwh)]
 
 
     def __len__(self):
@@ -145,10 +155,10 @@ class BboxReader(Dataset):
             train,valid: bbox number
             eval: filename
         """
-        if self.mode == 'train':
+        if self.mode == 'train1':
             print(int(len(self.bboxes) / (1-self.r_rand)))
             return int(len(self.bboxes) / (1-self.r_rand))
-        elif self.mode =='val':
+        elif self.mode =='val1':
             return len(self.bboxes)
         else:
             return len(self.filenames)
@@ -223,17 +233,23 @@ def augment(sample, target, bboxes, do_flip = True, do_rotate=True, do_swap = Tr
             bboxes[:,:3] = bboxes[:,:3][:,axisorder]
 
     if do_flip:
-        # flipid = np.array([np.random.randint(2),np.random.randint(2),np.random.randint(2)])*2-1
-        flipid = np.array([1,np.random.randint(2),np.random.randint(2)])*2-1
-        sample = np.ascontiguousarray(sample[:,::flipid[0],::flipid[1],::flipid[2]])
+        # Optimized flipid generation
+        flipid = np.array([1, np.random.choice([1, -1]), np.random.choice([1, -1])])
+        
+        # Use efficient slicing for flipping
+        sample = sample[:, ::flipid[0], ::flipid[1], ::flipid[2]]
 
+        # Update target and bounding boxes after flipping
+        shape_dims = sample.shape[1:4]
         for ax in range(3):
             if flipid[ax] == -1:
-                target[ax] = np.array(sample.shape[ax + 1]) - target[ax]
-                if len(bboxes.shape) == 1:
-                    print()
-                bboxes[:, ax] = np.array(sample.shape[ax + 1]) - bboxes[:, ax]
+                # No need for redundant np.array conversions
+                target[ax] = shape_dims[ax] - target[ax]
+                if bboxes.ndim == 2:  # Added check for multidimensional bboxes
+                    bboxes[:, ax] = shape_dims[ax] - bboxes[:, ax]
+
     return sample, target, bboxes
+
 
 class Crop(object):
     def __init__(self, config):
@@ -319,7 +335,6 @@ class Crop(object):
                 crop = np.pad(crop, pad2, 'constant', constant_values=self.pad_value)
             for i in range(6):
                 target[i] = target[i] * scale
-
             for i in range(len(bboxes)):
                 for j in range(6):
                     bboxes[i][j] = bboxes[i][j] * scale
@@ -357,3 +372,15 @@ def draw_image_bbox(image, bboxes):
         # 繪製 bounding box
         plt.gca().add_patch(plt.Rectangle((x, y), w, h, linewidth=2, edgecolor='g', facecolor='none'))  # 綠色邊框
         plt.show() 
+def draw_image(image):
+    import matplotlib
+    matplotlib.use('TkAgg')
+    img = image[0][int(20),:,:]
+    plt.figure(figsize=(5,5))
+    plt.imshow(img, cmap='gray', interpolation='nearest')  
+    plt.axis('off')  # 不顯示座標軸
+    plt.show()
+    plt.pause(1)
+    plt.close() 
+
+
