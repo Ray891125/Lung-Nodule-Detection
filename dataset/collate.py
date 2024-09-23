@@ -27,6 +27,8 @@ def train_collate(batch):
     return [inputs, bbox_padded, label_padded]
 
 
+
+
 def eval_collate(batch):
     batch_size = len(batch)
     inputs = torch.stack([batch[b][0] for b in range(batch_size)], 0)
@@ -51,7 +53,11 @@ def eval_collate(batch):
     bbox_padded = torch.from_numpy(bbox_padded)
 
     return [inputs, bbox_padded, label_padded]
-
+def split_eval_collate(batch):
+    # inputs = [for b in batch]
+    # batch_size = len(batch)
+    # batches = [batch[b] for b in range(batch_size)]
+    return batch
 
 def test_collate(batch):
     batch_size = len(batch)
